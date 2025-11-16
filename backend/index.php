@@ -1,125 +1,318 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors','1'); error_reporting(E_ALL);
+ini_set('display_errors', '1');
+error_reporting(E_ALL);
 
 require __DIR__ . '/vendor/autoload.php';
 
-require_once __DIR__ . '/dao/UsersDAO.php';
-require_once __DIR__ . '/dao/CategoriesDAO.php';
-require_once __DIR__ . '/dao/ProductsDAO.php';
-require_once __DIR__ . '/dao/OrdersDAO.php';
-require_once __DIR__ . '/dao/OrderItemsDAO.php';
+require_once __DIR__ . '/services/UsersService.php';
+require_once __DIR__ . '/services/CategoriesService.php';
+require_once __DIR__ . '/services/ProductsService.php';
+require_once __DIR__ . '/services/OrdersService.php';
+require_once __DIR__ . '/services/OrderItemsService.php';
 
+// CORS
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
 
-function jsonBody(): array { return json_decode(file_get_contents('php://input'), true) ?? []; }
-
-Flight::route('GET /health', function() { echo json_encode(['ok' => true]); });
-
-/** USERS */
-Flight::route('GET /users', function () {
-    $dao = new UsersDAO();
-    if (isset($_GET['id'])) { echo json_encode($dao->findById((int)$_GET['id'])); return; }
-    echo json_encode($dao->list());
-});
-Flight::route('POST /users', function () {
-    $dao = new UsersDAO(); $b = jsonBody();
-    $id = $dao->create($b['email'], password_hash($b['password'], PASSWORD_BCRYPT));
-    echo json_encode(['id' => $id]);
-});
-Flight::route('PUT|PATCH /users', function () {
-    $dao = new UsersDAO(); $b = jsonBody();
-    $ok = $dao->update((int)$b['id'], $b['email'] ?? null, isset($b['password']) ? password_hash($b['password'], PASSWORD_BCRYPT) : null);
-    echo json_encode(['success' => $ok]);
-});
-Flight::route('DELETE /users', function () {
-    $dao = new UsersDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->delete((int)$b['id'])]);
-});
-
-/** CATEGORIES */
-Flight::route('GET /categories', function () {
-    $dao = new CategoriesDAO();
-    if (isset($_GET['id'])) { echo json_encode($dao->findById((int)$_GET['id'])); return; }
-    echo json_encode($dao->list());
-});
-Flight::route('POST /categories', function () {
-    $dao = new CategoriesDAO(); $b = jsonBody();
-    echo json_encode(['id' => $dao->create($b['name'], $b['parent_id'] ?? null)]);
-});
-Flight::route('PUT|PATCH /categories', function () {
-    $dao = new CategoriesDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->update((int)$b['id'], $b['name'] ?? null, $b['parent_id'] ?? null)]);
-});
-Flight::route('DELETE /categories', function () {
-    $dao = new CategoriesDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->delete((int)$b['id'])]);
-});
-
-/** PRODUCTS */
-Flight::route('GET /products', function () {
-    $dao = new ProductsDAO();
-    if (isset($_GET['id'])) { echo json_encode($dao->findById((int)$_GET['id'])); return; }
-    echo json_encode($dao->list());
-});
-Flight::route('POST /products', function () {
-    $dao = new ProductsDAO(); $b = jsonBody();
-    echo json_encode(['id' => $dao->create($b['category_id'] ?? null, $b['name'], (float)$b['price'])]);
-});
-Flight::route('PUT|PATCH /products', function () {
-    $dao = new ProductsDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->update((int)$b['id'], $b['category_id'] ?? null, $b['name'] ?? null, isset($b['price']) ? (float)$b['price'] : null)]);
-});
-Flight::route('DELETE /products', function () {
-    $dao = new ProductsDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->delete((int)$b['id'])]);
-});
-
-/** ORDERS */
-Flight::route('GET /orders', function () {
-    $dao = new OrdersDAO();
-    if (isset($_GET['id']))     { echo json_encode($dao->findById((int)$_GET['id'])); return; }
-    if (isset($_GET['user_id'])){ echo json_encode($dao->listByUser((int)$_GET['user_id'])); return; }
-    echo json_encode(['error' => 'Provide id or user_id']);
-});
-Flight::route('POST /orders', function () {
-    $dao = new OrdersDAO(); $b = jsonBody();
-    if (isset($b['items'])) {
-        $id = $dao->createWithItems((int)$b['user_id'], $b['items']); // [[product_id, qty, price],...]
-        echo json_encode(['id' => $id]); return;
+// Helper: decode JSON body
+function jsonBody(): array
+{
+    $raw = file_get_contents('php://input');
+    if ($raw === false || $raw === '') {
+        return [];
     }
-    echo json_encode(['id' => $dao->create((int)$b['user_id'], (float)($b['total'] ?? 0), $b['status'] ?? 'pending')]);
-});
-Flight::route('PUT|PATCH /orders', function () {
-    $dao = new OrdersDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->update((int)$b['id'], isset($b['total']) ? (float)$b['total'] : null, $b['status'] ?? null)]);
-});
-Flight::route('DELETE /orders', function () {
-    $dao = new OrdersDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->delete((int)$b['id'])]);
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+// Global error handler
+Flight::map('error', function (Throwable $e) {
+    $code = $e instanceof InvalidArgumentException ? 400 : 500;
+    Flight::json([
+        'error'   => $e->getMessage(),
+        'type'    => (new ReflectionClass($e))->getShortName(),
+    ], $code);
 });
 
-/** ORDER ITEMS */
+// 404
+Flight::map('notFound', function () {
+    Flight::json(['error' => 'Not found'], 404);
+});
+
+// Health check
+Flight::route('GET /health', function () {
+    Flight::json(['ok' => true]);
+});
+
+/**
+ * USERS CRUD
+ */
+Flight::route('GET /users', function () {
+    $service = new UsersService();
+    $limit   = (int)($_GET['limit'] ?? 50);
+    $offset  = (int)($_GET['offset'] ?? 0);
+    Flight::json($service->list($limit, $offset));
+});
+
+Flight::route('GET /users/@id', function (int $id) {
+    $service = new UsersService();
+    $user = $service->get($id);
+    if (!$user) {
+        Flight::json(['error' => 'User not found'], 404);
+        return;
+    }
+    Flight::json($user);
+});
+
+Flight::route('POST /users', function () {
+    $service = new UsersService();
+    $id = $service->create(jsonBody());
+    Flight::json(['id' => $id], 201);
+});
+
+Flight::route('PUT /users/@id', function (int $id) {
+    $service = new UsersService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('PATCH /users/@id', function (int $id) {
+    $service = new UsersService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('DELETE /users/@id', function (int $id) {
+    $service = new UsersService();
+    $ok = $service->delete($id);
+    Flight::json(['success' => $ok]);
+});
+
+/**
+ * CATEGORIES CRUD
+ */
+Flight::route('GET /categories', function () {
+    $service = new CategoriesService();
+    $limit   = (int)($_GET['limit'] ?? 50);
+    $offset  = (int)($_GET['offset'] ?? 0);
+    Flight::json($service->list($limit, $offset));
+});
+
+Flight::route('GET /categories/@id', function (int $id) {
+    $service = new CategoriesService();
+    $cat = $service->get($id);
+    if (!$cat) {
+        Flight::json(['error' => 'Category not found'], 404);
+        return;
+    }
+    Flight::json($cat);
+});
+
+Flight::route('POST /categories', function () {
+    $service = new CategoriesService();
+    $id = $service->create(jsonBody());
+    Flight::json(['id' => $id], 201);
+});
+
+Flight::route('PUT /categories/@id', function (int $id) {
+    $service = new CategoriesService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('PATCH /categories/@id', function (int $id) {
+    $service = new CategoriesService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('DELETE /categories/@id', function (int $id) {
+    $service = new CategoriesService();
+    $ok = $service->delete($id);
+    Flight::json(['success' => $ok]);
+});
+
+/**
+ * PRODUCTS CRUD
+ */
+Flight::route('GET /products', function () {
+    $service = new ProductsService();
+    $limit   = (int)($_GET['limit'] ?? 50);
+    $offset  = (int)($_GET['offset'] ?? 0);
+    Flight::json($service->list($limit, $offset));
+});
+
+Flight::route('GET /products/@id', function (int $id) {
+    $service = new ProductsService();
+    $product = $service->get($id);
+    if (!$product) {
+        Flight::json(['error' => 'Product not found'], 404);
+        return;
+    }
+    Flight::json($product);
+});
+
+Flight::route('POST /products', function () {
+    $service = new ProductsService();
+    $id = $service->create(jsonBody());
+    Flight::json(['id' => $id], 201);
+});
+
+Flight::route('PUT /products/@id', function (int $id) {
+    $service = new ProductsService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('PATCH /products/@id', function (int $id) {
+    $service = new ProductsService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('DELETE /products/@id', function (int $id) {
+    $service = new ProductsService();
+    $ok = $service->delete($id);
+    Flight::json(['success' => $ok]);
+});
+
+/**
+ * ORDERS CRUD
+ */
+Flight::route('GET /orders', function () {
+    $service = new OrdersService();
+    $limit   = (int)($_GET['limit'] ?? 50);
+    $offset  = (int)($_GET['offset'] ?? 0);
+    Flight::json($service->list($limit, $offset));
+});
+
+Flight::route('GET /orders/@id', function (int $id) {
+    $service = new OrdersService();
+    $order = $service->get($id);
+    if (!$order) {
+        Flight::json(['error' => 'Order not found'], 404);
+        return;
+    }
+    Flight::json($order);
+});
+
+Flight::route('POST /orders', function () {
+    $service = new OrdersService();
+    $id = $service->create(jsonBody());
+    Flight::json(['id' => $id], 201);
+});
+
+Flight::route('PUT /orders/@id', function (int $id) {
+    $service = new OrdersService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('PATCH /orders/@id', function (int $id) {
+    $service = new OrdersService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('DELETE /orders/@id', function (int $id) {
+    $service = new OrdersService();
+    $ok = $service->delete($id);
+    Flight::json(['success' => $ok]);
+});
+
+/**
+ * ORDER ITEMS CRUD
+ */
 Flight::route('GET /order_items', function () {
-    $dao = new OrderItemsDAO();
-    if (isset($_GET['order_id'])) { echo json_encode($dao->listByOrder((int)$_GET['order_id'])); return; }
-    echo json_encode(['error' => 'Provide order_id']);
+    $service = new OrderItemsService();
+    if (isset($_GET['order_id'])) {
+        $orderId = (int)$_GET['order_id'];
+        Flight::json($service->listByOrder($orderId));
+        return;
+    }
+    Flight::json(['error' => 'Provide order_id query parameter'], 400);
 });
+
+Flight::route('GET /order_items/@id', function (int $id) {
+    $service = new OrderItemsService();
+    $item = $service->get($id);
+    if (!$item) {
+        Flight::json(['error' => 'Order item not found'], 404);
+        return;
+    }
+    Flight::json($item);
+});
+
 Flight::route('POST /order_items', function () {
-    $dao = new OrderItemsDAO(); $b = jsonBody();
-    echo json_encode(['id' => $dao->create((int)$b['order_id'], (int)$b['product_id'], (int)$b['qty'], (float)$b['unit_price'])]);
+    $service = new OrderItemsService();
+    $id = $service->create(jsonBody());
+    Flight::json(['id' => $id], 201);
 });
-Flight::route('PUT|PATCH /order_items', function () {
-    $dao = new OrderItemsDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->update((int)$b['id'], $b['qty'] ?? null, isset($b['unit_price']) ? (float)$b['unit_price'] : null)]);
+
+Flight::route('PUT /order_items/@id', function (int $id) {
+    $service = new OrderItemsService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
 });
-Flight::route('DELETE /order_items', function () {
-    $dao = new OrderItemsDAO(); $b = jsonBody();
-    echo json_encode(['success' => $dao->delete((int)$b['id'])]);
+
+Flight::route('PATCH /order_items/@id', function (int $id) {
+    $service = new OrderItemsService();
+    $ok = $service->update($id, jsonBody());
+    Flight::json(['success' => $ok]);
+});
+
+Flight::route('DELETE /order_items/@id', function (int $id) {
+    $service = new OrderItemsService();
+    $ok = $service->delete($id);
+    Flight::json(['success' => $ok]);
+});
+
+/**
+ * Presentation layer: simple products page rendered with Flight
+ */
+Flight::route('GET /products-page', function () {
+    $service = new ProductsService();
+    $products = $service->list(100, 0);
+
+    header('Content-Type: text/html; charset=utf-8');
+
+    echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Products</title>';
+    echo '<style>body{font-family:Arial, sans-serif;margin:20px;}table{border-collapse:collapse;width:100%;}';
+    echo 'th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f5f5f5;}</style>';
+    echo '</head><body>';
+    echo '<h1>Products</h1>';
+    echo '<table><tr><th>ID</th><th>Name</th><th>Price</th><th>Category ID</th></tr>';
+
+    foreach ($products as $p) {
+        $id   = htmlspecialchars((string)$p['id'], ENT_QUOTES, 'UTF-8');
+        $name = htmlspecialchars((string)$p['name'], ENT_QUOTES, 'UTF-8');
+        $price = htmlspecialchars((string)$p['price'], ENT_QUOTES, 'UTF-8');
+        $catId = htmlspecialchars((string)($p['category_id'] ?? ''), ENT_QUOTES, 'UTF-8');
+
+        echo "<tr><td>{$id}</td><td>{$name}</td><td>{$price}</td><td>{$catId}</td></tr>";
+    }
+
+    echo '</table></body></html>';
+});
+
+/**
+ * OpenAPI JSON and Swagger UI
+ */
+Flight::route('GET /openapi.json', function () {
+    header('Content-Type: application/json; charset=utf-8');
+    readfile(__DIR__ . '/openapi.json');
+});
+
+Flight::route('GET /docs', function () {
+    header('Content-Type: text/html; charset=utf-8');
+    readfile(__DIR__ . '/swagger.html');
 });
 
 Flight::start();
