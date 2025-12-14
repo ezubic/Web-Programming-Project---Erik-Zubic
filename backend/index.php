@@ -6,6 +6,13 @@ error_reporting(E_ALL);
 
 require __DIR__ . '/vendor/autoload.php';
 
+$config = require __DIR__ . '/config.php';
+require_once __DIR__ . '/middleware/Middleware.php';
+require_once __DIR__ . '/middleware/Authorization.php';
+require_once __DIR__ . '/services/AuthService.php';
+
+Middleware::init($config);
+
 require_once __DIR__ . '/services/UsersService.php';
 require_once __DIR__ . '/services/CategoriesService.php';
 require_once __DIR__ . '/services/ProductsService.php';
@@ -18,18 +25,18 @@ header('Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
-    exit;
+    
+// Middleware bootstrap (logging, JSON parsing, token decoding)
+Flight::before('start', function () {
+    Middleware::bootstrap();
+});
+exit;
 }
 
 // Helper: decode JSON body
 function jsonBody(): array
 {
-    $raw = file_get_contents('php://input');
-    if ($raw === false || $raw === '') {
-        return [];
-    }
-    $data = json_decode($raw, true);
-    return is_array($data) ? $data : [];
+    return Middleware::json();
 }
 
 // Global error handler
@@ -52,9 +59,27 @@ Flight::route('GET /health', function () {
 });
 
 /**
+ * AUTH
+ */
+Flight::route('POST /auth/register', function () use ($config) {
+    $service = new AuthService($config);
+    $result = $service->register(jsonBody());
+    Flight::json($result);
+});
+
+Flight::route('POST /auth/login', function () use ($config) {
+    $service = new AuthService($config);
+    $result = $service->login(jsonBody());
+    Flight::json($result);
+});
+
+
+/**
  * USERS CRUD
  */
 Flight::route('GET /users', function () {
+    Authorization::requireAdmin();
+
     $service = new UsersService();
     $limit   = (int)($_GET['limit'] ?? 50);
     $offset  = (int)($_GET['offset'] ?? 0);
@@ -62,6 +87,8 @@ Flight::route('GET /users', function () {
 });
 
 Flight::route('GET /users/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new UsersService();
     $user = $service->get($id);
     if (!$user) {
@@ -72,24 +99,32 @@ Flight::route('GET /users/@id', function (int $id) {
 });
 
 Flight::route('POST /users', function () {
+    Authorization::requireAdmin();
+
     $service = new UsersService();
     $id = $service->create(jsonBody());
     Flight::json(['id' => $id], 201);
 });
 
 Flight::route('PUT /users/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new UsersService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('PATCH /users/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new UsersService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('DELETE /users/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new UsersService();
     $ok = $service->delete($id);
     Flight::json(['success' => $ok]);
@@ -99,6 +134,8 @@ Flight::route('DELETE /users/@id', function (int $id) {
  * CATEGORIES CRUD
  */
 Flight::route('GET /categories', function () {
+    Authorization::requireAuth();
+
     $service = new CategoriesService();
     $limit   = (int)($_GET['limit'] ?? 50);
     $offset  = (int)($_GET['offset'] ?? 0);
@@ -106,6 +143,8 @@ Flight::route('GET /categories', function () {
 });
 
 Flight::route('GET /categories/@id', function (int $id) {
+    Authorization::requireAuth();
+
     $service = new CategoriesService();
     $cat = $service->get($id);
     if (!$cat) {
@@ -116,24 +155,32 @@ Flight::route('GET /categories/@id', function (int $id) {
 });
 
 Flight::route('POST /categories', function () {
+    Authorization::requireAdmin();
+
     $service = new CategoriesService();
     $id = $service->create(jsonBody());
     Flight::json(['id' => $id], 201);
 });
 
 Flight::route('PUT /categories/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new CategoriesService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('PATCH /categories/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new CategoriesService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('DELETE /categories/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new CategoriesService();
     $ok = $service->delete($id);
     Flight::json(['success' => $ok]);
@@ -143,6 +190,8 @@ Flight::route('DELETE /categories/@id', function (int $id) {
  * PRODUCTS CRUD
  */
 Flight::route('GET /products', function () {
+    Authorization::requireAuth();
+
     $service = new ProductsService();
     $limit   = (int)($_GET['limit'] ?? 50);
     $offset  = (int)($_GET['offset'] ?? 0);
@@ -150,6 +199,8 @@ Flight::route('GET /products', function () {
 });
 
 Flight::route('GET /products/@id', function (int $id) {
+    Authorization::requireAuth();
+
     $service = new ProductsService();
     $product = $service->get($id);
     if (!$product) {
@@ -160,24 +211,32 @@ Flight::route('GET /products/@id', function (int $id) {
 });
 
 Flight::route('POST /products', function () {
+    Authorization::requireAdmin();
+
     $service = new ProductsService();
     $id = $service->create(jsonBody());
     Flight::json(['id' => $id], 201);
 });
 
 Flight::route('PUT /products/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new ProductsService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('PATCH /products/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new ProductsService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('DELETE /products/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new ProductsService();
     $ok = $service->delete($id);
     Flight::json(['success' => $ok]);
@@ -187,6 +246,8 @@ Flight::route('DELETE /products/@id', function (int $id) {
  * ORDERS CRUD
  */
 Flight::route('GET /orders', function () {
+    Authorization::requireAdmin();
+
     $service = new OrdersService();
     $limit   = (int)($_GET['limit'] ?? 50);
     $offset  = (int)($_GET['offset'] ?? 0);
@@ -194,6 +255,8 @@ Flight::route('GET /orders', function () {
 });
 
 Flight::route('GET /orders/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrdersService();
     $order = $service->get($id);
     if (!$order) {
@@ -204,24 +267,32 @@ Flight::route('GET /orders/@id', function (int $id) {
 });
 
 Flight::route('POST /orders', function () {
+    Authorization::requireAuth();
+
     $service = new OrdersService();
     $id = $service->create(jsonBody());
     Flight::json(['id' => $id], 201);
 });
 
 Flight::route('PUT /orders/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrdersService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('PATCH /orders/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrdersService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('DELETE /orders/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrdersService();
     $ok = $service->delete($id);
     Flight::json(['success' => $ok]);
@@ -231,6 +302,8 @@ Flight::route('DELETE /orders/@id', function (int $id) {
  * ORDER ITEMS CRUD
  */
 Flight::route('GET /order_items', function () {
+    Authorization::requireAdmin();
+
     $service = new OrderItemsService();
     if (isset($_GET['order_id'])) {
         $orderId = (int)$_GET['order_id'];
@@ -241,6 +314,8 @@ Flight::route('GET /order_items', function () {
 });
 
 Flight::route('GET /order_items/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrderItemsService();
     $item = $service->get($id);
     if (!$item) {
@@ -251,24 +326,32 @@ Flight::route('GET /order_items/@id', function (int $id) {
 });
 
 Flight::route('POST /order_items', function () {
+    Authorization::requireAuth();
+
     $service = new OrderItemsService();
     $id = $service->create(jsonBody());
     Flight::json(['id' => $id], 201);
 });
 
 Flight::route('PUT /order_items/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrderItemsService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('PATCH /order_items/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrderItemsService();
     $ok = $service->update($id, jsonBody());
     Flight::json(['success' => $ok]);
 });
 
 Flight::route('DELETE /order_items/@id', function (int $id) {
+    Authorization::requireAdmin();
+
     $service = new OrderItemsService();
     $ok = $service->delete($id);
     Flight::json(['success' => $ok]);

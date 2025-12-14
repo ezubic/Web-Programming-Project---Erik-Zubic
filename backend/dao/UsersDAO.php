@@ -13,7 +13,13 @@ final class UsersDAO extends BaseDAO {
         return (int)$this->db->lastInsertId();
     }
 
-    public function findById(int $id): ?array {
+        public function findByEmail(string $email): ?array {
+        $stmt = $this->db->prepare("SELECT id, email, password_hash FROM users WHERE email = ?");
+        $stmt->execute([$email]);
+        return $stmt->fetch() ?: null;
+    }
+
+public function findById(int $id): ?array {
         $stmt = $this->db->prepare("SELECT id, email, password_hash FROM users WHERE id = ?");
         $stmt->execute([$id]);
         return $stmt->fetch() ?: null;
